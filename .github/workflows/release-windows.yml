@@ -100,7 +100,7 @@ jobs:
           }
       
       - name: Upload ZIP artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mole-${{ steps.version.outputs.VERSION }}-x64-zip
           path: release/mole-${{ steps.version.outputs.VERSION }}-x64.zip
@@ -108,21 +108,21 @@ jobs:
       
 
       - name: Upload EXE artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mole-${{ steps.version.outputs.VERSION }}-x64-exe
           path: release/mole-${{ steps.version.outputs.VERSION }}-x64.exe
           if-no-files-found: ignore
       
       - name: Upload checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checksums
           path: release/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Upload TUI binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tui-binaries
           path: |
