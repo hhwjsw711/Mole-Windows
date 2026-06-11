@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -164,6 +165,21 @@ type historyEntry struct {
 	LargeFiles []fileEntry
 	TotalSize  int64
 	Selected   int
+}
+
+type jsonOutput struct {
+	Path       string      `json:"path"`
+	TotalSize  int64       `json:"total_size"`
+	TotalFiles int64       `json:"total_files"`
+	Entries    []jsonEntry `json:"entries"`
+}
+
+type jsonEntry struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Size       int64  `json:"size"`
+	IsDir      bool   `json:"is_dir"`
+	LastAccess string `json:"last_access"`
 }
 
 // Model for Bubble Tea
@@ -738,10 +754,91 @@ func openInExplorer(path string) {
 	}()
 }
 
+func runJSONMode(path string) {
+	entries, _, totalSize, err := scanDirectory(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	totalFiles := countTotalFiles(path)
+
+	jsonEntries := make([]jsonEntry, len(entries))
+	for i, e := range entries {
+		lastAccessStr := ""
+		if !e.LastAccess.IsZero() {
+			lastAccessStr = e.LastAccess.Format(time.RFC3339)
+		}
+		jsonEntries[i] = jsonEntry{
+			Name:       e.Name,
+			Path:       e.Path,
+			Size:       e.Size,
+			IsDir:      e.IsDir,
+			LastAccess: lastAccessStr,
+		}
+	}
+
+	output := jsonOutput{
+		Path:       path,
+		TotalSize:  totalSize,
+		TotalFiles: totalFiles,
+		Entries:    jsonEntries,
+	}
+
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
+func countTotalFiles(path string) int64 {
+	var count int64
+	countFilesRecursive(path, 0, &count)
+	return count
+}
+
+func countFilesRecursive(path string, depth int, count *int64) {
+	if depth > shallowScanDepth {
+		return
+	}
+	if atomic.LoadInt64(count) > maxFilesPerDir {
+		return
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if atomic.LoadInt64(count) > maxFilesPerDir {
+			return
+		}
+		name := entry.Name()
+		if skipPatterns[name] {
+			continue
+		}
+
+		entryPath := filepath.Join(path, name)
+		if entry.IsDir() {
+			if strings.HasPrefix(name, ".") && len(name) > 1 {
+				continue
+			}
+			countFilesRecursive(entryPath, depth+1, count)
+		} else {
+			atomic.AddInt64(count, 1)
+		}
+	}
+}
+
 func main() {
 	var startPath string
+	var jsonMode bool
 
 	flag.StringVar(&startPath, "path", "", "Path to analyze")
+	flag.BoolVar(&jsonMode, "json", false, "Output results as JSON")
 	flag.Parse()
 
 	// Check environment variable
@@ -770,6 +867,11 @@ func main() {
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Error: Path does not exist: %s\n", absPath)
 		os.Exit(1)
+	}
+
+	if jsonMode {
+		runJSONMode(absPath)
+		return
 	}
 
 	p := tea.NewProgram(newModel(absPath), tea.WithAltScreen())

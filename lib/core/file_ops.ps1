@@ -14,10 +14,49 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\log.ps1"
 
 # ============================================================================
+# Deletion Logging
+# ============================================================================
+
+$script:DeletionLogDir = "$env:LOCALAPPDATA\Mole\logs"
+$script:DeletionLogFile = Join-Path $script:DeletionLogDir "deletions.log"
+$script:DeletionLogReady = $false
+
+function Initialize-DeletionLog {
+    if (-not (Test-Path $script:DeletionLogDir)) {
+        New-Item -ItemType Directory -Path $script:DeletionLogDir -Force | Out-Null
+    }
+    $script:DeletionLogReady = $true
+}
+
+function Write-DeletionLog {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet("remove", "trash")]
+        [string]$Operation,
+        [Parameter(Mandatory)]
+        [string]$Category,
+        [Parameter(Mandatory)]
+        [ValidateSet("ok", "failed")]
+        [string]$Result,
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not $script:DeletionLogReady) {
+        Initialize-DeletionLog
+    }
+
+    $timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+    $entry = "$timestamp`t$Operation`t$Category`t$Result`t$Path"
+    $entry | Add-Content -Path $script:DeletionLogFile -Encoding UTF8
+}
+
+# ============================================================================
 # Global State
 # ============================================================================
 
 $script:MoleDryRunMode = $env:MOLE_DRY_RUN -eq "1"
+$script:MoleJsonMode = $false
 $script:TotalSizeCleaned = 0
 $script:FilesCleaned = 0
 $script:TotalItems = 0
@@ -130,6 +169,8 @@ function Remove-SafeItem {
         
         [string]$Description = "",
         
+        [string]$Category = "file",
+        
         [switch]$Force,
         
         [switch]$Recurse
@@ -154,6 +195,11 @@ function Remove-SafeItem {
     
     # Handle dry run
     if ($script:MoleDryRunMode) {
+        if ($script:MoleJsonMode) {
+            $script:TotalSizeCleaned += $sizeKB
+            $script:FilesCleaned++
+            $script:TotalItems++
+        }
         $name = if ($Description) { $Description } else { Split-Path -Leaf $Path }
         Write-DryRun "$name $($script:Colors.Yellow)($sizeHuman dry)$($script:Colors.NC)"
         Set-SectionActivity
@@ -171,6 +217,8 @@ function Remove-SafeItem {
             Remove-Item -Path $Path -Force -ErrorAction Stop
         }
         
+        Write-DeletionLog -Operation remove -Category $Category -Result ok -Path $Path
+        
         # Update statistics
         $script:TotalSizeCleaned += $sizeKB
         $script:FilesCleaned++
@@ -184,6 +232,7 @@ function Remove-SafeItem {
         return $true
     }
     catch {
+        Write-DeletionLog -Operation remove -Category $Category -Result failed -Path $Path
         Write-Debug "Failed to remove $Path : $_"
         return $false
     }
@@ -198,7 +247,9 @@ function Remove-SafeItems {
         [Parameter(Mandatory)]
         [string[]]$Paths,
         
-        [string]$Description = "Items"
+        [string]$Description = "Items",
+        
+        [string]$Category = "file"
     )
     
     $totalSize = 0
@@ -230,10 +281,12 @@ function Remove-SafeItems {
             else {
                 Remove-Item -Path $path -Force -ErrorAction Stop
             }
+            Write-DeletionLog -Operation remove -Category $Category -Result ok -Path $path
             $totalSize += $size
             $removedCount++
         }
         catch {
+            Write-DeletionLog -Operation remove -Category $Category -Result failed -Path $path
             $failedCount++
             Write-Debug "Failed to remove: $path - $_"
         }
@@ -244,6 +297,11 @@ function Remove-SafeItems {
         $sizeHuman = Format-ByteSize -Bytes $totalSize
         
         if ($script:MoleDryRunMode) {
+            if ($script:MoleJsonMode) {
+                $script:TotalSizeCleaned += $sizeKB
+                $script:FilesCleaned += $removedCount
+                $script:TotalItems++
+            }
             Write-DryRun "$Description $($script:Colors.Yellow)($removedCount items, $sizeHuman dry)$($script:Colors.NC)"
         }
         else {
@@ -423,6 +481,15 @@ function Set-DryRunMode {
     #>
     param([bool]$Enabled)
     $script:MoleDryRunMode = $Enabled
+}
+
+function Set-JsonMode {
+    <#
+    .SYNOPSIS
+        Enable or disable JSON scan mode (dry-run that tracks stats)
+    #>
+    param([bool]$Enabled)
+    $script:MoleJsonMode = $Enabled
 }
 
 function Test-DryRunMode {

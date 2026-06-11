@@ -26,6 +26,7 @@ $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 . "$libDir\core\log.ps1"
 . "$libDir\core\ui.ps1"
 . "$libDir\core\file_ops.ps1"
+. "$libDir\core\history.ps1"
 
 # ============================================================================
 # Configuration
@@ -542,6 +543,8 @@ function Main {
         return
     }
 
+    $startedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+
     # Clear screen
     Clear-Host
 
@@ -609,6 +612,15 @@ function Main {
 
     if ($confirm -eq 'y' -or $confirm -eq 'Y') {
         Remove-ProjectArtifacts -Projects $selected
+
+        $sizeHuman = Format-ByteSize -Bytes ($script:TotalSizeCleaned * 1024)
+        Write-SessionRecord -Command purge `
+            -StartedAt $startedAt `
+            -EndedAt (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz") `
+            -Items $script:ItemsCleaned `
+            -Size $sizeHuman `
+            -OperationCount $script:ItemsCleaned
+
         Show-PurgeSummary
     }
     else {

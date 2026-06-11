@@ -26,6 +26,7 @@ $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 . "$libDir\core\log.ps1"
 . "$libDir\core\ui.ps1"
 . "$libDir\core\file_ops.ps1"
+. "$libDir\core\history.ps1"
 
 # ============================================================================
 # Configuration
@@ -857,6 +858,9 @@ function Main {
     # Set dry-run mode
     $script:DryRun = $DryRun
 
+    $startedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+    $script:StartTime = $startedAt
+
     # Clear screen
     Clear-Host
 
@@ -900,6 +904,17 @@ function Main {
         if ($runSfc -eq 'y' -or $runSfc -eq 'Y') {
             Test-SystemFiles
         }
+    }
+
+    if (-not $script:DryRun) {
+        Write-SessionRecord -Command optimize `
+            -StartedAt $script:StartTime `
+            -EndedAt (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz") `
+            -Items $script:OptimizationsApplied `
+            -Size "" `
+            -OperationCount $script:OptimizationsApplied `
+            -Removed $script:OptimizationsApplied `
+            -Failed $script:IssuesFound
     }
 
     # Summary

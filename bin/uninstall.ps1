@@ -10,6 +10,9 @@ param(
     [Alias('r')]
     [switch]$Rescan,
     
+    [Alias('l')]
+    [switch]$List,
+    
     [Alias('h')]
     [switch]$ShowHelp
 )
@@ -26,6 +29,7 @@ $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 . "$libDir\core\log.ps1"
 . "$libDir\core\ui.ps1"
 . "$libDir\core\file_ops.ps1"
+. "$libDir\core\history.ps1"
 
 # ============================================================================
 # Configuration
@@ -47,6 +51,7 @@ function Show-UninstallHelp {
     Write-Host "$esc[33mUsage:$esc[0m mo uninstall [options]"
     Write-Host ""
     Write-Host "$esc[33mOptions:$esc[0m"
+    Write-Host "  --list       List all installed applications as JSON"
     Write-Host "  --rescan     Force rescan of installed applications"
     Write-Host "  --debug      Enable debug logging"
     Write-Host "  --help       Show this help message"
@@ -558,9 +563,65 @@ function Uninstall-SelectedApps {
     }
     Write-Host ""
 
+    if ($script:StartTime) {
+        Write-SessionRecord -Command uninstall `
+            -StartedAt $script:StartTime `
+            -EndedAt (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz") `
+            -Items $Apps.Count `
+            -Size "" `
+            -OperationCount ($successCount + $failCount) `
+            -Removed $successCount `
+            -Failed $failCount
+    }
+
     # Clear cache
     if (Test-Path $script:AppCacheFile) {
         Remove-Item $script:AppCacheFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ============================================================================
+# App List (--list mode)
+# ============================================================================
+
+function Get-AppListJson {
+    $apps = Get-InstalledApplications -ForceRescan:$Rescan
+
+    $jsonList = @()
+    foreach ($app in $apps) {
+        $source = switch ($app.Source) {
+            "Registry"      { "App" }
+            "WindowsStore"  { "Store" }
+            default         { "App" }
+        }
+
+        $sizeStr = "--"
+        if ($app.SizeKB -gt 0) {
+            $sizeStr = Format-ByteSize -Bytes ($app.SizeKB * 1024)
+        }
+
+        $installPath = if ($app.InstallLocation) { $app.InstallLocation } else { "" }
+
+        $jsonList += [PSCustomObject]@{
+            name           = $app.Name
+            path           = $installPath
+            bundle_id      = ""
+            source         = $source
+            uninstall_name = $app.Name
+            size           = $sizeStr
+        }
+    }
+
+    $count = @($jsonList).Count
+    if ($count -eq 0) {
+        Write-Output "[]"
+    }
+    elseif ($count -eq 1) {
+        $singleJson = $jsonList | ConvertTo-Json -Depth 3
+        Write-Output "[$singleJson]"
+    }
+    else {
+        Write-Output ($jsonList | ConvertTo-Json -Depth 3)
     }
 }
 
@@ -580,6 +641,15 @@ function Main {
         Show-UninstallHelp
         return
     }
+
+    # JSON list mode
+    if ($List) {
+        Get-AppListJson
+        return
+    }
+
+    $startedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+    $script:StartTime = $startedAt
 
     # Clear screen
     Clear-Host

@@ -19,6 +19,9 @@ param(
     [Alias('w')]
     [switch]$Whitelist,
     
+    [Alias('j')]
+    [switch]$Json,
+    
     [Alias('h')]
     [switch]$ShowHelp
 )
@@ -35,6 +38,7 @@ $libDir = Join-Path (Split-Path -Parent $scriptDir) "lib"
 . "$libDir\core\log.ps1"
 . "$libDir\core\ui.ps1"
 . "$libDir\core\file_ops.ps1"
+. "$libDir\core\history.ps1"
 
 # Import cleanup modules
 . "$libDir\clean\user.ps1"
@@ -62,6 +66,7 @@ function Show-CleanHelp {
     Write-Host ""
     Write-Host "$esc[33mOptions:$esc[0m"
     Write-Host "  --dry-run      Preview changes without deleting (recommended first run)"
+    Write-Host "  --json         Output cleanup scan results as JSON (dry-run only)"
     Write-Host "  --system       Include system-level cleanup (requires admin)"
     Write-Host "  --game-media   Clean old game replays, screenshots, recordings (>90d)"
     Write-Host "  --whitelist    Manage protected paths"
@@ -181,6 +186,8 @@ function Start-Cleanup {
 
     $esc = [char]27
 
+    $startedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+
     # Clear screen
     Clear-Host
     Write-Host ""
@@ -274,8 +281,168 @@ function Start-Cleanup {
     # Get final stats
     $stats = Get-CleanupStats
 
+    if (-not $IsDryRun) {
+        Write-SessionRecord -Command clean `
+            -StartedAt $startedAt `
+            -EndedAt (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz") `
+            -Items $stats.FilesCleaned `
+            -Size $stats.TotalSizeHuman `
+            -OperationCount $stats.FilesCleaned `
+            -Removed $stats.FilesCleaned
+    }
+
     # Show summary
     Show-CleanupSummary -Stats $stats -IsDryRun $IsDryRun
+}
+
+# ============================================================================
+# JSON Scan Mode
+# ============================================================================
+
+function Start-CleanupJson {
+    param(
+        [bool]$IncludeSystem,
+        [bool]$IncludeGameMedia
+    )
+
+    $origProgPref = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
+    try {
+        Set-DryRunMode -Enabled $true
+        Set-JsonMode -Enabled $true
+        Reset-CleanupStats
+
+        $categories = @()
+
+        $catDefs = @(
+            @{
+                Name  = "User temp files"
+                Func  = { Invoke-UserCleanup -TempDaysOld 7 -LogDaysOld 7 }
+                Paths = @("$env:TEMP", "$env:WINDIR\Temp")
+            }
+            @{
+                Name  = "Browser cache"
+                Func  = { Clear-BrowserCaches }
+                Paths = @(
+                    "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache",
+                    "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache"
+                )
+            }
+            @{
+                Name  = "GPU shader caches"
+                Func  = { Clear-GPUShaderCaches }
+                Paths = @(
+                    "$env:LOCALAPPDATA\NVIDIA\DXCache",
+                    "$env:LOCALAPPDATA\D3DSCache"
+                )
+            }
+            @{
+                Name  = "Application caches"
+                Func  = { Clear-AppCaches }
+                Paths = @(
+                    "$env:LOCALAPPDATA\Spotify\Data",
+                    "$env:APPDATA\discord\Cache"
+                )
+            }
+            @{
+                Name  = "Developer tools"
+                Func  = { Invoke-DevToolsCleanup }
+                Paths = @(
+                    "$env:LOCALAPPDATA\npm-cache",
+                    "$env:LOCALAPPDATA\pip\Cache",
+                    "$env:USERPROFILE\.cargo\registry\cache"
+                )
+            }
+            @{
+                Name  = "Applications"
+                Func  = { Invoke-AppCleanup -IncludeGameMedia:$IncludeGameMedia -GameMediaDaysOld 90 }
+                Paths = @(
+                    "$env:LOCALAPPDATA\Microsoft\Office\16.0\OfficeFileCache",
+                    "$env:LOCALAPPDATA\Microsoft\OneDrive\logs"
+                )
+            }
+        )
+
+        foreach ($def in $catDefs) {
+            $prevSize = $script:TotalSizeCleaned
+            $prevItems = $script:FilesCleaned
+
+            $null = & $def.Func 6>&1 2>&1 3>&1 4>&1 5>&1 | Out-Null
+
+            $catSizeKB = $script:TotalSizeCleaned - $prevSize
+            $catItems = $script:FilesCleaned - $prevItems
+
+            $expandedPaths = foreach ($p in $def.Paths) {
+                $ExecutionContext.InvokeCommand.ExpandString($p)
+            }
+            $filteredPaths = @($expandedPaths | Select-Object -First 5)
+
+            $catSizeBytes = $catSizeKB * 1024
+            $catSizeHuman = if ($catSizeKB -gt 0) { Format-ByteSize -Bytes $catSizeBytes } else { "0B" }
+
+            $categories += [PSCustomObject]@{
+                name        = $def.Name
+                size_bytes  = $catSizeBytes
+                size_human  = $catSizeHuman
+                item_count  = $catItems
+                paths       = $filteredPaths
+            }
+        }
+
+        if ($IncludeSystem -and (Test-IsAdmin)) {
+            $prevSize = $script:TotalSizeCleaned
+            $prevItems = $script:FilesCleaned
+
+            $null = Invoke-SystemCleanup 2>$null 3>$null 4>$null 5>$null
+
+            $sysSizeKB = $script:TotalSizeCleaned - $prevSize
+            $sysItems = $script:FilesCleaned - $prevItems
+            $sysSizeBytes = $sysSizeKB * 1024
+            $sysSizeHuman = if ($sysSizeKB -gt 0) { Format-ByteSize -Bytes $sysSizeBytes } else { "0B" }
+
+            $sysPaths = @(
+                "$env:WINDIR\Temp",
+                "$env:WINDIR\Logs\CBS",
+                "$env:WINDIR\SoftwareDistribution\Download"
+            ) | ForEach-Object {
+                $ExecutionContext.InvokeCommand.ExpandString($_)
+            }
+
+            $categories += [PSCustomObject]@{
+                name        = "System cleanup"
+                size_bytes  = $sysSizeBytes
+                size_human  = $sysSizeHuman
+                item_count  = $sysItems
+                paths       = [string[]]$sysPaths
+            }
+        }
+
+        $totalSizeBytes = $script:TotalSizeCleaned * 1024
+        $totalSizeHuman = if ($totalSizeBytes -gt 0) { Format-ByteSize -Bytes $totalSizeBytes } else { "0B" }
+
+        $output = [PSCustomObject]@{
+            command          = "clean"
+            dry_run          = $true
+            total_size_bytes = $totalSizeBytes
+            total_size_human = $totalSizeHuman
+            total_items      = $script:FilesCleaned
+            categories       = $categories
+        }
+
+        $json = $output | ConvertTo-Json -Depth 4
+
+        if ($categories.Count -eq 1) {
+            $json = $json -replace '"categories":  \{','"categories":  [{'
+            $json = $json -replace '"paths":  \[',']' + "`r`n" + '  }],' + "`r`n" + '  "paths":  ['
+        }
+
+        Write-Output $json
+    }
+    finally {
+        $ProgressPreference = $origProgPref
+        Set-JsonMode -Enabled $false
+    }
 }
 
 # ============================================================================
@@ -298,6 +465,12 @@ function Main {
     # Manage whitelist
     if ($Whitelist) {
         Edit-Whitelist
+        return
+    }
+
+    # JSON scan mode (dry-run + structured output)
+    if ($Json) {
+        Start-CleanupJson -IncludeSystem $System -IncludeGameMedia $GameMedia
         return
     }
 

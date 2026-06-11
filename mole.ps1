@@ -70,6 +70,7 @@ function Show-MainHelp {
     Write-Host "    ${cyan}optimize${nc}    System optimization and repairs"
     Write-Host "    ${cyan}analyze${nc}     Disk space analyzer"
     Write-Host "    ${cyan}status${nc}      System monitor"
+    Write-Host "    ${cyan}history${nc}     View cleanup history"
     Write-Host "    ${cyan}update${nc}      Update the source channel"
     Write-Host "    ${cyan}remove${nc}      Remove Mole from this system"
     Write-Host "    ${cyan}purge${nc}       Clean project artifacts"
@@ -87,6 +88,7 @@ function Show-MainHelp {
     Write-Host "    ${gray}mo uninstall${nc}            ${gray}# Uninstall apps${nc}"
     Write-Host "    ${gray}mo analyze${nc}              ${gray}# Disk analyzer${nc}"
     Write-Host "    ${gray}mo status${nc}               ${gray}# System monitor${nc}"
+    Write-Host "    ${gray}mo history --json${nc}       ${gray}# View cleanup history as JSON${nc}"
     Write-Host "    ${gray}mo update${nc}               ${gray}# Pull latest windows source${nc}"
     Write-Host "    ${gray}mo remove${nc}               ${gray}# Remove Mole from this system${nc}"
     Write-Host "    ${gray}mo optimize${nc}             ${gray}# Optimize system (includes repairs)${nc}"
@@ -137,6 +139,12 @@ function Show-MainMenu {
             Description = "System monitor"
             Command = "status"
             Icon = $script:Icons.Solid
+        }
+        @{
+            Name = "History"
+            Description = "View cleanup history"
+            Command = "history"
+            Icon = $script:Icons.List
         }
         @{
             Name = "Update"
@@ -288,7 +296,7 @@ function Main {
 
     # If command specified, route to it
     if ($effectiveCommand) {
-        $validCommands = @("clean", "uninstall", "analyze", "status", "optimize", "update", "remove", "purge")
+        $validCommands = @("clean", "uninstall", "analyze", "status", "optimize", "update", "remove", "purge", "history")
 
         if ($effectiveCommand -in $validCommands) {
             Invoke-MoleCommand -CommandName $effectiveCommand -Arguments $CommandArgs
